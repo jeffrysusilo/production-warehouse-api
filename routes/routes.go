@@ -11,4 +11,6 @@ func SetupRoutes(router *gin.Engine) {
 	router.GET("/items/:id", controllers.GetItemByID)
 	router.PUT("/items/:id", controllers.UpdateItem)
 	router.DELETE("/items/:id", controllers.DeleteItem)
+	router.POST("/productions", controllers.CreateProduction)
+	router.GET("/productions", controllers.GetProductions)
 }
