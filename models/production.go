@@ -17,4 +17,5 @@ type Production struct {
 	Materials        []MaterialUsed     `bson:"materials" json:"materials"`
 	QuantityProduced int                `bson:"quantity_produced" json:"quantity_produced"`
 	ProductionDate   time.Time          `bson:"production_date" json:"production_date"`
+	Status           string             `bson:"status" json:"status"` // new field
 }

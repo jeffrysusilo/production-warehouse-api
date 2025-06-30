@@ -24,6 +24,7 @@ func CreateProduction(c *gin.Context) {
 
 	prod.ID = primitive.NewObjectID()
 	prod.ProductionDate = time.Now()
+	prod.Status = "pending"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -39,20 +40,27 @@ func CreateProduction(c *gin.Context) {
 	job.AddJob(prodID, jobCancel)
 
 	go func() {
-		batchSize := prod.QuantityProduced
-		seconds := (batchSize / 100) * 10
-		if seconds == 0 {
-			seconds = 10 // default
-		}
+	batchSize := prod.QuantityProduced
+	seconds := (batchSize / 100) * 10
+	if seconds == 0 {
+		seconds = 10 
+	}
 
-		select {
-		case <-time.After(time.Duration(seconds) * time.Second):
-			processProduction(prod)
-			job.CancelJob(prodID) 
-		case <-jobCtx.Done():
-			fmt.Println("Produksi", prodID, "dibatalkan.")
-		}
-	}()
+	select {
+	case <-time.After(time.Duration(seconds) * time.Second):
+		processProduction(prod)
+		job.CancelJob(prodID)
+
+	case <-jobCtx.Done():
+		fmt.Println("Produksi", prodID, "dibatalkan.")
+
+		config.DB.Collection("productions").UpdateOne(context.Background(), bson.M{"_id": prod.ID}, bson.M{
+			"$set": bson.M{"status": "canceled"},
+		})
+
+		logProductionAction(prod.ID, "canceled", "Produksi dibatalkan oleh pengguna")
+	}
+}()
 
 	c.JSON(http.StatusAccepted, gin.H{"message": "Produksi dimulai", "id": prodID})
 }
@@ -130,7 +138,14 @@ func processProduction(prod models.Production) {
 			"$inc": bson.M{"quantity": prod.QuantityProduced},
 		})
 	}
+
+	config.DB.Collection("productions").UpdateOne(ctx, bson.M{"_id": prod.ID}, bson.M{
+		"$set": bson.M{"status": "completed"},
+	})
+
+	logProductionAction(prod.ID, "completed", "Produksi selesai otomatis")
 }
+
 
 
 func CancelProduction(c *gin.Context) {
@@ -141,5 +156,20 @@ func CancelProduction(c *gin.Context) {
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Produksi tidak ditemukan atau sudah selesai"})
 	}
+}
+
+func logProductionAction(prodID primitive.ObjectID, action, note string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	logEntry := models.ProductionLog{
+		ID:           primitive.NewObjectID(),
+		ProductionID: prodID,
+		Action:       action,
+		Timestamp:    time.Now(),
+		Note:         note,
+	}
+
+	config.DB.Collection("production_logs").InsertOne(ctx, logEntry)
 }
 
