@@ -123,4 +123,31 @@ func UpdateItem(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Item berhasil diupdate"})
 }
 
+func DeleteItem(c *gin.Context) {
+	idParam := c.Param("id")
+
+	objID, err := primitive.ObjectIDFromHex(idParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID tidak valid"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := config.DB.Collection("items").DeleteOne(ctx, bson.M{"_id": objID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal menghapus item"})
+		return
+	}
+
+	if result.DeletedCount == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Item tidak ditemukan"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Item berhasil dihapus"})
+}
+
+
 
