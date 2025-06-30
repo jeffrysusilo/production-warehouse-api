@@ -13,4 +13,5 @@ func SetupRoutes(router *gin.Engine) {
 	router.DELETE("/items/:id", controllers.DeleteItem)
 	router.POST("/productions", controllers.CreateProduction)
 	router.GET("/productions", controllers.GetProductions)
+	router.POST("/productions/:id/cancel", controllers.CancelProduction)
 }

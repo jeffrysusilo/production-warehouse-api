@@ -11,11 +11,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+
+	"production-warehouse-api/job"
 )
 
 func CreateProduction(c *gin.Context) {
 	var prod models.Production
-
 	if err := c.ShouldBindJSON(&prod); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -24,55 +25,38 @@ func CreateProduction(c *gin.Context) {
 	prod.ID = primitive.NewObjectID()
 	prod.ProductionDate = time.Now()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	for _, mat := range prod.Materials {
-		filter := bson.M{"_id": mat.ItemID}
-		update := bson.M{"$inc": bson.M{"quantity": -mat.QuantityUsed}}
-
-		result := config.DB.Collection("items").FindOneAndUpdate(ctx, filter, update)
-		if result.Err() != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Gagal mengurangi stok material"})
-			return
-		}
-	}
-
-	var productItem models.Item
-	err := config.DB.Collection("items").FindOne(ctx, bson.M{"name": prod.ProductName}).Decode(&productItem)
-
-	if err != nil {
-		newItem := models.Item{
-			ID:          primitive.NewObjectID(),
-			Name:        prod.ProductName,
-			Category:    "Hasil Produksi",
-			Quantity:    prod.QuantityProduced,
-			Warehouse:   "Gudang Produksi",
-			Description: "Otomatis dari proses produksi",
-		}
-		_, err := config.DB.Collection("items").InsertOne(ctx, newItem)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal membuat produk item"})
-			return
-		}
-	} else {
-		_, err := config.DB.Collection("items").UpdateOne(ctx, bson.M{"_id": productItem.ID}, bson.M{
-			"$inc": bson.M{"quantity": prod.QuantityProduced},
-		})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal update stok produk jadi"})
-			return
-		}
-	}
-
-	_, err = config.DB.Collection("productions").InsertOne(ctx, prod)
+	_, err := config.DB.Collection("productions").InsertOne(ctx, prod)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal menyimpan data produksi"})
 		return
 	}
 
-	c.JSON(http.StatusCreated, prod)
+	prodID := prod.ID.Hex()
+	jobCtx, jobCancel := context.WithCancel(context.Background())
+	job.AddJob(prodID, jobCancel)
+
+	go func() {
+		batchSize := prod.QuantityProduced
+		seconds := (batchSize / 100) * 10
+		if seconds == 0 {
+			seconds = 10 // default
+		}
+
+		select {
+		case <-time.After(time.Duration(seconds) * time.Second):
+			processProduction(prod)
+			job.CancelJob(prodID) 
+		case <-jobCtx.Done():
+			fmt.Println("Produksi", prodID, "dibatalkan.")
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, gin.H{"message": "Produksi dimulai", "id": prodID})
 }
+
 
 func GetProductions(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -117,5 +101,45 @@ func GetProductionByID(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, prod)
+}
+
+func processProduction(prod models.Production) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for _, mat := range prod.Materials {
+		filter := bson.M{"_id": mat.ItemID}
+		update := bson.M{"$inc": bson.M{"quantity": -mat.QuantityUsed}}
+		config.DB.Collection("items").UpdateOne(ctx, filter, update)
+	}
+
+	var existing models.Item
+	err := config.DB.Collection("items").FindOne(ctx, bson.M{"name": prod.ProductName}).Decode(&existing)
+	if err != nil {
+		newItem := models.Item{
+			ID:          primitive.NewObjectID(),
+			Name:        prod.ProductName,
+			Category:    "Produk Jadi",
+			Quantity:    prod.QuantityProduced,
+			Warehouse:   "Gudang Produksi",
+			Description: "Dari proses produksi otomatis",
+		}
+		config.DB.Collection("items").InsertOne(ctx, newItem)
+	} else {
+		config.DB.Collection("items").UpdateOne(ctx, bson.M{"_id": existing.ID}, bson.M{
+			"$inc": bson.M{"quantity": prod.QuantityProduced},
+		})
+	}
+}
+
+
+func CancelProduction(c *gin.Context) {
+	id := c.Param("id")
+	success := job.CancelJob(id)
+	if success {
+		c.JSON(http.StatusOK, gin.H{"message": "Produksi dibatalkan"})
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Produksi tidak ditemukan atau sudah selesai"})
+	}
 }
 
