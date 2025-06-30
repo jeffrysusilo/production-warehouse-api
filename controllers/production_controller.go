@@ -13,6 +13,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"production-warehouse-api/job"
+
+	"fmt"
 )
 
 func CreateProduction(c *gin.Context) {
@@ -35,32 +37,34 @@ func CreateProduction(c *gin.Context) {
 		return
 	}
 
+	logProductionAction(prod.ID, "created", "Produksi dimulai")
+
 	prodID := prod.ID.Hex()
 	jobCtx, jobCancel := context.WithCancel(context.Background())
 	job.AddJob(prodID, jobCancel)
 
 	go func() {
-	batchSize := prod.QuantityProduced
-	seconds := (batchSize / 100) * 10
-	if seconds == 0 {
-		seconds = 10 
-	}
+		batchSize := prod.QuantityProduced
+		seconds := (batchSize / 100) * 10
+		if seconds == 0 {
+			seconds = 10 	
+		}
 
-	select {
-	case <-time.After(time.Duration(seconds) * time.Second):
-		processProduction(prod)
-		job.CancelJob(prodID)
+		select {
+		case <-time.After(time.Duration(seconds) * time.Second):
+			processProduction(prod)
+			job.CancelJob(prodID)
 
-	case <-jobCtx.Done():
-		fmt.Println("Produksi", prodID, "dibatalkan.")
+		case <-jobCtx.Done():
+			fmt.Println("Produksi", prodID, "dibatalkan.")
 
-		config.DB.Collection("productions").UpdateOne(context.Background(), bson.M{"_id": prod.ID}, bson.M{
-			"$set": bson.M{"status": "canceled"},
-		})
+			config.DB.Collection("productions").UpdateOne(context.Background(), bson.M{"_id": prod.ID}, bson.M{
+				"$set": bson.M{"status": "canceled"},
+			})
 
-		logProductionAction(prod.ID, "canceled", "Produksi dibatalkan oleh pengguna")
-	}
-}()
+			logProductionAction(prod.ID, "canceled", "Produksi dibatalkan oleh pengguna")
+		}
+	}()
 
 	c.JSON(http.StatusAccepted, gin.H{"message": "Produksi dimulai", "id": prodID})
 }
@@ -172,4 +176,35 @@ func logProductionAction(prodID primitive.ObjectID, action, note string) {
 
 	config.DB.Collection("production_logs").InsertOne(ctx, logEntry)
 }
+
+func GetProductionLogs(c *gin.Context) {
+	idParam := c.Param("id")
+	prodID, err := primitive.ObjectIDFromHex(idParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID tidak valid"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cursor, err := config.DB.Collection("production_logs").Find(ctx, bson.M{"production_id": prodID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal mengambil log"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var logs []models.ProductionLog
+	for cursor.Next(ctx) {
+		var log models.ProductionLog
+		if err := cursor.Decode(&log); err != nil {
+			continue
+		}
+		logs = append(logs, log)
+	}
+
+	c.JSON(http.StatusOK, logs)
+}
+
 

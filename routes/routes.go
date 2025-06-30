@@ -14,4 +14,5 @@ func SetupRoutes(router *gin.Engine) {
 	router.POST("/productions", controllers.CreateProduction)
 	router.GET("/productions", controllers.GetProductions)
 	router.POST("/productions/:id/cancel", controllers.CancelProduction)
+	router.GET("/productions/:id/logs", controllers.GetProductionLogs)
 }
